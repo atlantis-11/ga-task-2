@@ -1,0 +1,27 @@
+name: Lint and format
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Path to check
+        required: false
+        type: string
+
+jobs:
+  lint-and-format:
+    runs-on: bubuntu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint
+        uses: astral-sh/ruff-action@v3
+        with:
+          src: ${{ inputs.path }}
+
+      - name: Check formatting
+        uses: astral-sh/ruff-action@v3
+        with:
+          src: ${{ inputs.path }}
+          args: format --check

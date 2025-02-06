@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PUBLISH_PYTHON_VERSION: '3.10'
+  ARTIFACT: my-cowsay
+
+jobs:
+  lint-and-format:
+    uses: ./.github/workflows/lint-and-format.yml
+    with:
+      path: ./src
+      
+  test-and-build:
+    runs-on: bubuntu
+
+    needs: lint-and-format
+
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: false
+
+      - name: Sync test dependencies
+        run:
+          uv pip compile pyproject.toml --extra test |
+          uv pip sync -
+
+      - name: Run tests
+        run: python -B -m pytest tests/
+
+      - name: Sync prod dependencies
+        run:
+          uv pip compile pyproject.toml |
+          uv pip sync -
+        if: matrix.python-version == env.PUBLISH_PYTHON_VERSION
+
+      - name: Package app
+        run: |
+          cd .venv/lib/python${UV_PYTHON}/site-packages/
+          zip -rq ../../../../package.zip .
+          cd ../../../../src
+          zip -rq ../package.zip .
+        if: matrix.python-version == env.PUBLISH_PYTHON_VERSION
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: package.zip
+        if: matrix.python-version == env.PUBLISH_PYTHON_VERSION
+
+  deploy:
+    runs-on: bubuntu
+
+    environment: prod
+
+    permissions:
+      id-token: write
+
+    needs: test-and-build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - uses: actions/checkout@v4
+        with:
+          repository: atlantis-11/ga-task-2-tf
+          path: tf
+
+      - name: Create terraform.tfvars
+        run: |
+          cat <<EOF > tf/terraform.tfvars
+          lambda_name = "${{ env.ARTIFACT }}"
+          python_version = "${{ env.PUBLISH_PYTHON_VERSION }}"
+          EOF
+
+      - name: Configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT }}:role/ga-task-2-role
+          aws-region: us-east-1
+
+      - name: Deploy
+        run: |
+          cd tf
+          terraform init
+          terraform plan -out tfplan
+          terraform apply tfplan
